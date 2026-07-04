@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Serverless chat application infrastructure'
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        NODE_ENV: production
+
+Resources:
+  # DynamoDB Table for interaction logs
+  InteractionLogsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-interaction-logs'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  # Lambda function for chat API
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-chat-handler'
+      CodeUri: ../backend/
+      Handler: index.handler
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref InteractionLogsTable
+          CORS_ALLOWED_ORIGINS: '*'
+          CORS_ALLOWED_METHODS: 'GET,POST,OPTIONS'
+          CORS_ALLOWED_HEADERS: 'Content-Type,Authorization'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InteractionLogsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+      Events:
+        HealthCheck:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ChatApi
+            Path: /
+            Method: GET
+        ChatPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ChatApi
+            Path: /chat
+            Method: POST
+        ChatOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ChatApi
+            Path: /chat
+            Method: OPTIONS
+
+  # API Gateway
+  ChatApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-chat-api'
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+        MaxAge: "'600'"
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+
+  # CloudWatch Log Group
+  ChatFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ChatFunction}'
+      RetentionInDays: 14
+
+Outputs:
+  ApiUrl:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${ChatApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiUrl'
+  
+  DynamoDBTable:
+    Description: 'DynamoDB table name for interaction logs'
+    Value: !Ref InteractionLogsTable
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBTable'
+  
+  LambdaFunction:
+    Description: 'Lambda function ARN'
+    Value: !GetAtt ChatFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunction'
